@@ -425,7 +425,7 @@ const App = () => {
           <div className="space-y-4 max-w-lg mx-auto">
              <h2 className="text-4xl font-extrabold text-slate-800 tracking-tight">Sucesso!</h2>
              <p className="text-slate-600 text-xl font-medium leading-relaxed">
-               As informações de <strong className="text-indigo-600">{formData.agentName || "sua I.A."}</strong> foram enviadas e a configuração foi concluída com êxito.
+               As informações da <strong className="text-indigo-600">{formData.companyName || "sua empresa"}</strong> foram enviadas e a configuração foi concluída com êxito.
              </p>
              <p className="text-slate-400 text-sm">Nossa equipe processará seus dados em breve.</p>
           </div>
