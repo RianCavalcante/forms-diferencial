@@ -157,7 +157,7 @@ const App = () => {
 
   const [formData, setFormData] = useState({
     companyName: '',
-    segment: 'Roupas / Moda',
+    segment: '',
     segmentOther: '',
     cityState: '',
     agentName: '',
@@ -230,6 +230,7 @@ const App = () => {
       case 1:
         if (!formData.companyName.trim()) return false;
         if (!formData.cityState.trim()) return false;
+        if (!formData.segment) return false;
         if (formData.segment === 'Outros' && !formData.segmentOther.trim()) return false;
         return true;
       case 2:
@@ -458,6 +459,7 @@ const App = () => {
                 value={formData.segment}
                 onChange={handleChange}
               >
+                  <option value="" disabled>Selecione um segmento...</option>
                   <option value="Roupas / Moda">Roupas / Moda</option>
                   <option value="Calçados">Calçados</option>
                   <option value="Cosméticos / Beleza">Cosméticos / Beleza</option>
