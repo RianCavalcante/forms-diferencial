@@ -168,12 +168,13 @@ const App = () => {
     avoidPhrases: '',
     faqQuestions: '',
     faqAnswers: '',
-    faqFile: null,
+    faqFiles: [],
     trainingText: '',
-    trainingFile: null
+    trainingFiles: []
   });
 
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     const script = document.createElement('script');
@@ -207,22 +208,34 @@ const App = () => {
   };
 
   const handleFileChange = (e, fieldName) => {
-    const file = e.target.files[0];
-    if (file) {
-      if (file.type === "application/pdf" || 
-          file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || 
-          file.type === "text/plain") {
-         setFormData(prev => ({ ...prev, [fieldName]: file }));
-         if (error) setError('');
-      } else {
-        alert("Por favor, envie apenas arquivos PDF, DOCX ou TXT.");
-      }
+    const files = Array.from(e.target.files);
+    const validFiles = files.filter(file => 
+      file.type === "application/pdf" || 
+      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || 
+      file.type === "text/plain"
+    );
+    
+    if (validFiles.length > 0) {
+      setFormData(prev => ({ 
+        ...prev, 
+        [fieldName]: [...prev[fieldName], ...validFiles] 
+      }));
+      if (error) setError('');
     }
+    
+    if (validFiles.length < files.length) {
+      alert("Alguns arquivos foram ignorados. Apenas PDF, DOCX ou TXT são aceitos.");
+    }
+    
+    // Limpar input para permitir adicionar o mesmo arquivo novamente
+    e.target.value = '';
   };
 
-  const removeFile = (fieldName, ref) => {
-    setFormData(prev => ({ ...prev, [fieldName]: null }));
-    if (ref.current) ref.current.value = "";
+  const removeFile = (fieldName, index) => {
+    setFormData(prev => ({
+      ...prev,
+      [fieldName]: prev[fieldName].filter((_, i) => i !== index)
+    }));
   };
 
   const validateStep = (currentStep) => {
@@ -242,13 +255,13 @@ const App = () => {
         return true;
       case 4:
         const hasFaqText = formData.faqQuestions.trim() && formData.faqAnswers.trim();
-        const hasFaqFile = !!formData.faqFile;
-        if (!hasFaqText && !hasFaqFile) return false;
+        const hasFaqFiles = formData.faqFiles.length > 0;
+        if (!hasFaqText && !hasFaqFiles) return false;
         return true;
       case 5:
         const hasTrainingText = formData.trainingText.trim();
-        const hasTrainingFile = !!formData.trainingFile;
-        if (!hasTrainingText && !hasTrainingFile) return false;
+        const hasTrainingFiles = formData.trainingFiles.length > 0;
+        if (!hasTrainingText && !hasTrainingFiles) return false;
         return true;
       default:
         return true;
@@ -283,8 +296,22 @@ const App = () => {
     }
   };
 
-  const createFormData = (file = null, context = null) => {
+  // Gerar ID único para a submissão
+  const generateSubmissionId = () => {
+    const timestamp = Date.now().toString(36);
+    const randomPart = Math.random().toString(36).substring(2, 8);
+    return `SUB-${timestamp}-${randomPart}`.toUpperCase();
+  };
+
+  const createFormData = (file = null, context = null, submissionId = null) => {
     const dataToSend = new FormData();
+    
+    // ID da Submissão - permite agrupar todas as requisições do mesmo usuário
+    if (submissionId) {
+      dataToSend.append("ID da Submissao", submissionId);
+      // URL do Histórico - link para visualizar este preenchimento
+      dataToSend.append("URL do Historico", `https://forms-diferencial.vercel.app/historico/${submissionId}`);
+    }
     
     // Mapeamento para nomes em Português
     dataToSend.append("Nome da Empresa", formData.companyName);
@@ -318,40 +345,45 @@ const App = () => {
     }
     setError('');
     setIsSending(true);
+    setIsLoading(true);
 
     const webhookUrl = 'https://diferencialbi.app.n8n.cloud/webhook/recebiforms';
 
     try {
       const requests = [];
+      
+      // Gerar ID único para esta submissão - será o mesmo em todas as requisições
+      const submissionId = generateSubmissionId();
+      console.log(`ID da Submissão: ${submissionId}`);
 
       // Estratégia: Enviar requisições separadas para garantir que cada arquivo use a chave 'data'
       
-      // 1. Envio do Arquivo de FAQ (se existir)
-      if (formData.faqFile) {
+      // 1. Envio dos Arquivos de FAQ (se existirem)
+      formData.faqFiles.forEach(file => {
         requests.push(
           fetch(webhookUrl, {
             method: 'POST',
-            body: createFormData(formData.faqFile, "FAQ")
+            body: createFormData(file, "FAQ", submissionId)
           })
         );
-      }
+      });
 
-      // 2. Envio do Arquivo de Treinamento (se existir)
-      if (formData.trainingFile) {
+      // 2. Envio dos Arquivos de Treinamento (se existirem)
+      formData.trainingFiles.forEach(file => {
         requests.push(
           fetch(webhookUrl, {
             method: 'POST',
-            body: createFormData(formData.trainingFile, "Treinamento")
+            body: createFormData(file, "Treinamento", submissionId)
           })
         );
-      }
+      });
 
       // 3. Caso não haja NENHUM arquivo, envia apenas os dados de texto
-      if (!formData.faqFile && !formData.trainingFile) {
+      if (formData.faqFiles.length === 0 && formData.trainingFiles.length === 0) {
         requests.push(
           fetch(webhookUrl, {
             method: 'POST',
-            body: createFormData()
+            body: createFormData(null, null, submissionId)
           })
         );
       }
@@ -362,6 +394,10 @@ const App = () => {
 
       console.log('Todos os envios concluídos com sucesso!');
       
+      // Mostrar loading por pelo menos 2.5 segundos para melhor UX
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      
+      setIsLoading(false);
       triggerConfetti();
       setIsSubmitted(true);
       window.scrollTo(0, 0);
@@ -369,6 +405,8 @@ const App = () => {
     } catch (err) {
       console.error('Erro ao enviar webhook:', err);
       // Fallback visual para sucesso
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      setIsLoading(false);
       triggerConfetti();
       setIsSubmitted(true);
       window.scrollTo(0, 0);
@@ -414,6 +452,53 @@ const App = () => {
   };
 
   const renderContent = () => {
+    // Tela de Loading com animação
+    if (isLoading) {
+      return (
+        <div className="animate-fade-in text-center space-y-8 py-24 flex flex-col items-center justify-center min-h-[400px]">
+          <div className="analyze">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              height="80"
+              width="80"
+            >
+              <rect height="24" width="24"></rect>
+              <path
+                strokeLinecap="round"
+                strokeWidth="1.5"
+                stroke="#6366f1"
+                d="M19.25 9.25V5.25C19.25 4.42157 18.5784 3.75 17.75 3.75H6.25C5.42157 3.75 4.75 4.42157 4.75 5.25V18.75C4.75 19.5784 5.42157 20.25 6.25 20.25H12.25"
+                className="board"
+              ></path>
+              <path
+                fill="#6366f1"
+                d="M9.18748 11.5066C9.12305 11.3324 8.87677 11.3324 8.81234 11.5066L8.49165 12.3732C8.47139 12.428 8.42823 12.4711 8.37348 12.4914L7.50681 12.8121C7.33269 12.8765 7.33269 13.1228 7.50681 13.1872L8.37348 13.5079C8.42823 13.5282 8.47139 13.5714 8.49165 13.6261L8.81234 14.4928C8.87677 14.6669 9.12305 14.6669 9.18748 14.4928L9.50818 13.6261C9.52844 13.5714 9.5716 13.5282 9.62634 13.5079L10.493 13.1872C10.6671 13.1228 10.6671 12.8765 10.493 12.8121L9.62634 12.4914C9.5716 12.4711 9.52844 12.428 9.50818 12.3732L9.18748 11.5066Z"
+                className="star-2"
+              ></path>
+              <path
+                fill="#6366f1"
+                d="M11.7345 6.63394C11.654 6.41629 11.3461 6.41629 11.2656 6.63394L10.8647 7.71728C10.8394 7.78571 10.7855 7.83966 10.717 7.86498L9.6337 8.26585C9.41605 8.34639 9.41605 8.65424 9.6337 8.73478L10.717 9.13565C10.7855 9.16097 10.8394 9.21493 10.8647 9.28335L11.2656 10.3667C11.3461 10.5843 11.654 10.5843 11.7345 10.3667L12.1354 9.28335C12.1607 9.21493 12.2147 9.16097 12.2831 9.13565L13.3664 8.73478C13.5841 8.65424 13.5841 8.34639 13.3664 8.26585L12.2831 7.86498C12.2147 7.83966 12.1607 7.78571 12.1354 7.71728L11.7345 6.63394Z"
+                className="star-1"
+              ></path>
+              <path
+                className="stick"
+                strokeLinejoin="round"
+                strokeWidth="1.5"
+                stroke="#6366f1"
+                d="M17 14L21.2929 18.2929C21.6834 18.6834 21.6834 19.3166 21.2929 19.7071L20.7071 20.2929C20.3166 20.6834 19.6834 20.6834 19.2929 20.2929L15 16M17 14L15.7071 12.7071C15.3166 12.3166 14.6834 12.3166 14.2929 12.7071L13.7071 13.2929C13.3166 13.6834 13.3166 14.3166 13.7071 14.7071L15 16M17 14L15 16"
+              ></path>
+            </svg>
+          </div>
+          <div className="space-y-3 max-w-lg mx-auto">
+            <h2 className="text-2xl font-bold text-slate-700 tracking-tight">Processando...</h2>
+            <p className="text-slate-500 text-base font-medium">Aguarde enquanto enviamos as configurações.</p>
+          </div>
+        </div>
+      );
+    }
+
     if (isSubmitted) {
       return (
         <div className="animate-fade-in text-center space-y-8 py-24 flex flex-col items-center justify-center min-h-[400px]">
@@ -657,45 +742,53 @@ const App = () => {
 
               <div className="p-6 bg-indigo-50/50 border border-indigo-100 rounded-2xl">
                 <h3 className="text-sm font-bold text-indigo-700 uppercase tracking-wide mb-4 flex items-center gap-2">
-                   <UploadCloud size={16} /> Opção 2: Enviar Arquivo (FAQ)
+                   <UploadCloud size={16} /> Opção 2: Enviar Arquivo(s) FAQ
                  </h3>
                  
-                 {!formData.faqFile ? (
-                   <label className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer hover:bg-white transition-colors group ${error && !formData.faqQuestions && 'border-red-300 bg-red-50/20' || 'border-indigo-200 bg-white/50'}`}>
-                      <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                          <UploadCloud className={`mb-3 ${error && !formData.faqQuestions ? 'text-red-400' : 'text-indigo-400 group-hover:scale-110 transition-transform'}`} size={32} />
-                          <p className="mb-1 text-sm text-slate-600 font-medium">Clique para enviar ou arraste aqui</p>
-                          <p className="text-xs text-slate-400">PDF ou DOCX (Max 5MB)</p>
-                      </div>
-                      <input 
-                        ref={faqFileInputRef}
-                        type="file" 
-                        className="hidden" 
-                        accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        onChange={(e) => handleFileChange(e, 'faqFile')}
-                      />
-                   </label>
-                 ) : (
-                   <div className="flex items-center justify-between p-4 bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-                          <FileIcon size={24} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-700 truncate max-w-[200px]">{formData.faqFile.name}</p>
-                          <p className="text-xs text-slate-400">{(formData.faqFile.size / 1024).toFixed(1)} KB</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => removeFile('faqFile', faqFileInputRef)}
-                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Remover arquivo"
-                      >
-                        <X size={20} />
-                      </button>
+                 {/* Lista de arquivos enviados */}
+                 {formData.faqFiles.length > 0 && (
+                   <div className="space-y-2 mb-4">
+                     {formData.faqFiles.map((file, index) => (
+                       <div key={index} className="flex items-center justify-between p-3 bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up">
+                         <div className="flex items-center gap-3">
+                           <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
+                             <FileIcon size={20} />
+                           </div>
+                           <div>
+                             <p className="text-sm font-bold text-slate-700 truncate max-w-[180px]">{file.name}</p>
+                             <p className="text-xs text-slate-400">{(file.size / 1024).toFixed(1)} KB</p>
+                           </div>
+                         </div>
+                         <button 
+                           onClick={() => removeFile('faqFiles', index)}
+                           className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                           title="Remover arquivo"
+                         >
+                           <X size={18} />
+                         </button>
+                       </div>
+                     ))}
                    </div>
                  )}
-                 {error && !formData.faqFile && !formData.faqQuestions && (
+
+                 {/* Área de upload */}
+                 <label className={`flex flex-col items-center justify-center w-full h-24 border-2 border-dashed rounded-xl cursor-pointer hover:bg-white transition-colors group ${error && formData.faqFiles.length === 0 && !formData.faqQuestions ? 'border-red-300 bg-red-50/20' : 'border-indigo-200 bg-white/50'}`}>
+                    <div className="flex flex-col items-center justify-center py-4">
+                        <UploadCloud className={`mb-2 ${error && formData.faqFiles.length === 0 && !formData.faqQuestions ? 'text-red-400' : 'text-indigo-400 group-hover:scale-110 transition-transform'}`} size={28} />
+                        <p className="text-sm text-slate-600 font-medium">{formData.faqFiles.length > 0 ? 'Adicionar mais arquivos' : 'Clique para enviar'}</p>
+                        <p className="text-xs text-slate-400">PDF ou DOCX (Max 5MB cada)</p>
+                    </div>
+                    <input 
+                      ref={faqFileInputRef}
+                      type="file" 
+                      className="hidden" 
+                      multiple
+                      accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      onChange={(e) => handleFileChange(e, 'faqFiles')}
+                    />
+                 </label>
+
+                 {error && formData.faqFiles.length === 0 && !formData.faqQuestions && (
                    <p className="text-red-500 text-xs mt-2 font-medium flex items-center gap-1">
                      <AlertCircle size={12} /> Selecione pelo menos uma opção (Texto ou Arquivo).
                    </p>
@@ -739,45 +832,53 @@ const App = () => {
 
               <div className="p-6 bg-indigo-50/50 border border-indigo-100 rounded-2xl">
                 <h3 className="text-sm font-bold text-indigo-700 uppercase tracking-wide mb-4 flex items-center gap-2">
-                   <UploadCloud size={16} /> Opção 2: Enviar Arquivo com Conversas
+                   <UploadCloud size={16} /> Opção 2: Enviar Arquivo(s) com Conversas
                  </h3>
                  
-                 {!formData.trainingFile ? (
-                   <label className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer hover:bg-white transition-colors group ${error && !formData.trainingText && 'border-red-300 bg-red-50/20' || 'border-indigo-200 bg-white/50'}`}>
-                      <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                          <UploadCloud className={`mb-3 ${error && !formData.trainingText ? 'text-red-400' : 'text-indigo-400 group-hover:scale-110 transition-transform'}`} size={32} />
-                          <p className="mb-1 text-sm text-slate-600 font-medium">Clique para enviar ou arraste aqui</p>
-                          <p className="text-xs text-slate-400">PDF, DOCX ou TXT (Max 5MB)</p>
-                      </div>
-                      <input 
-                        ref={trainingFileInputRef}
-                        type="file" 
-                        className="hidden" 
-                        accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                        onChange={(e) => handleFileChange(e, 'trainingFile')}
-                      />
-                   </label>
-                 ) : (
-                   <div className="flex items-center justify-between p-4 bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-                          <FileIcon size={24} />
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-700 truncate max-w-[200px]">{formData.trainingFile.name}</p>
-                          <p className="text-xs text-slate-400">{(formData.trainingFile.size / 1024).toFixed(1)} KB</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => removeFile('trainingFile', trainingFileInputRef)}
-                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                        title="Remover arquivo"
-                      >
-                        <X size={20} />
-                      </button>
+                 {/* Lista de arquivos enviados */}
+                 {formData.trainingFiles.length > 0 && (
+                   <div className="space-y-2 mb-4">
+                     {formData.trainingFiles.map((file, index) => (
+                       <div key={index} className="flex items-center justify-between p-3 bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up">
+                         <div className="flex items-center gap-3">
+                           <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
+                             <FileIcon size={20} />
+                           </div>
+                           <div>
+                             <p className="text-sm font-bold text-slate-700 truncate max-w-[180px]">{file.name}</p>
+                             <p className="text-xs text-slate-400">{(file.size / 1024).toFixed(1)} KB</p>
+                           </div>
+                         </div>
+                         <button 
+                           onClick={() => removeFile('trainingFiles', index)}
+                           className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                           title="Remover arquivo"
+                         >
+                           <X size={18} />
+                         </button>
+                       </div>
+                     ))}
                    </div>
                  )}
-                 {error && !formData.trainingFile && !formData.trainingText && (
+
+                 {/* Área de upload */}
+                 <label className={`flex flex-col items-center justify-center w-full h-24 border-2 border-dashed rounded-xl cursor-pointer hover:bg-white transition-colors group ${error && formData.trainingFiles.length === 0 && !formData.trainingText ? 'border-red-300 bg-red-50/20' : 'border-indigo-200 bg-white/50'}`}>
+                    <div className="flex flex-col items-center justify-center py-4">
+                        <UploadCloud className={`mb-2 ${error && formData.trainingFiles.length === 0 && !formData.trainingText ? 'text-red-400' : 'text-indigo-400 group-hover:scale-110 transition-transform'}`} size={28} />
+                        <p className="text-sm text-slate-600 font-medium">{formData.trainingFiles.length > 0 ? 'Adicionar mais arquivos' : 'Clique para enviar'}</p>
+                        <p className="text-xs text-slate-400">PDF, DOCX ou TXT (Max 5MB cada)</p>
+                    </div>
+                    <input 
+                      ref={trainingFileInputRef}
+                      type="file" 
+                      className="hidden" 
+                      multiple
+                      accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                      onChange={(e) => handleFileChange(e, 'trainingFiles')}
+                    />
+                 </label>
+
+                 {error && formData.trainingFiles.length === 0 && !formData.trainingText && (
                    <p className="text-red-500 text-xs mt-2 font-medium flex items-center gap-1">
                      <AlertCircle size={12} /> Selecione pelo menos uma opção (Texto ou Arquivo).
                    </p>
@@ -1002,6 +1103,48 @@ const App = () => {
         }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
             background-color: #94a3b8;
+        }
+
+        /* Loading Animation Styles */
+        .analyze {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .analyze svg {
+          overflow: visible;
+        }
+        .analyze .board {
+          stroke-dasharray: 80;
+          stroke-dashoffset: 80;
+          animation: drawBoard 2s ease-in-out infinite;
+        }
+        .analyze .stick {
+          stroke-dasharray: 50;
+          stroke-dashoffset: 50;
+          animation: drawStick 1.5s ease-in-out infinite;
+        }
+        .analyze .star-1 {
+          transform-origin: center;
+          animation: pulseStar 1s ease-in-out infinite;
+        }
+        .analyze .star-2 {
+          transform-origin: center;
+          animation: pulseStar 1s ease-in-out infinite 0.3s;
+        }
+        @keyframes drawBoard {
+          0% { stroke-dashoffset: 80; }
+          50% { stroke-dashoffset: 0; }
+          100% { stroke-dashoffset: 80; }
+        }
+        @keyframes drawStick {
+          0% { stroke-dashoffset: 50; }
+          50% { stroke-dashoffset: 0; }
+          100% { stroke-dashoffset: 50; }
+        }
+        @keyframes pulseStar {
+          0%, 100% { transform: scale(1); opacity: 0.7; }
+          50% { transform: scale(1.3); opacity: 1; }
         }
       `}</style>
     </div>
