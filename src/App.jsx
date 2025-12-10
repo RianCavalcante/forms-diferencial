@@ -20,7 +20,11 @@ import {
   File as FileIcon,
   X,
   Trophy,
-  Loader2
+  Loader2,
+  Eye,
+  EyeOff,
+  FileType,
+  FileType2
 } from 'lucide-react';
 
 // Card de Seleção Premium (Minimalista com Glow)
@@ -236,6 +240,235 @@ const App = () => {
       ...prev,
       [fieldName]: prev[fieldName].filter((_, i) => i !== index)
     }));
+    // Limpar preview do arquivo removido
+    setFilePreviews(prev => {
+      const newPreviews = { ...prev };
+      delete newPreviews[`${fieldName}-${index}`];
+      return newPreviews;
+    });
+  };
+
+  // Estado para armazenar previews de arquivos TXT e thumbnails PDF
+  const [filePreviews, setFilePreviews] = useState({});
+  const [expandedFiles, setExpandedFiles] = useState({});
+  const [pdfThumbnails, setPdfThumbnails] = useState({});
+  const [loadingPdf, setLoadingPdf] = useState({});
+
+  // Função para ler conteúdo de arquivo TXT
+  const readTxtFile = (file, key) => {
+    if (file.type === 'text/plain' && !filePreviews[key]) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target.result;
+        setFilePreviews(prev => ({ ...prev, [key]: content }));
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  // Função para gerar thumbnail de PDF
+  const generatePdfThumbnail = async (file, key) => {
+    if (file.type !== 'application/pdf' || pdfThumbnails[key] || loadingPdf[key]) return;
+    
+    setLoadingPdf(prev => ({ ...prev, [key]: true }));
+    
+    try {
+      const pdfjsLib = await import('pdfjs-dist');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+      
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const page = await pdf.getPage(1);
+      
+      const scale = 0.5;
+      const viewport = page.getViewport({ scale });
+      
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.height = viewport.height;
+      canvas.width = viewport.width;
+      
+      await page.render({ canvasContext: context, viewport }).promise;
+      
+      const thumbnail = canvas.toDataURL('image/png');
+      setPdfThumbnails(prev => ({ ...prev, [key]: thumbnail }));
+    } catch (err) {
+      console.error('Erro ao gerar thumbnail PDF:', err);
+    } finally {
+      setLoadingPdf(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  // Função para obter ícone e cor baseado no tipo de arquivo
+  const getFileTypeInfo = (file) => {
+    if (file.type === 'application/pdf') {
+      return { icon: FileText, color: 'bg-red-100 text-red-600', label: 'PDF' };
+    } else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      return { icon: FileType2, color: 'bg-blue-100 text-blue-600', label: 'DOCX' };
+    } else if (file.type === 'text/plain') {
+      return { icon: FileType, color: 'bg-green-100 text-green-600', label: 'TXT' };
+    }
+    return { icon: FileIcon, color: 'bg-slate-100 text-slate-600', label: 'FILE' };
+  };
+
+  // Função para formatar tamanho do arquivo
+  const formatFileSize = (bytes) => {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+  };
+
+  // Componente de Preview de Arquivo
+  const FilePreviewCard = ({ file, index, fieldName, onRemove }) => {
+    const fileKey = `${fieldName}-${index}`;
+    const typeInfo = getFileTypeInfo(file);
+    const isExpanded = expandedFiles[fileKey];
+    const preview = filePreviews[fileKey];
+    const pdfThumb = pdfThumbnails[fileKey];
+    const isPdfLoading = loadingPdf[fileKey];
+
+    // Gerar previews quando o componente monta
+    useEffect(() => {
+      let cancelled = false;
+      
+      const generatePreview = async () => {
+        // TXT
+        if (file.type === 'text/plain' && !filePreviews[fileKey]) {
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            if (!cancelled) {
+              setFilePreviews(prev => ({ ...prev, [fileKey]: e.target.result }));
+            }
+          };
+          reader.readAsText(file);
+        }
+        
+        // PDF
+        if (file.type === 'application/pdf' && !pdfThumbnails[fileKey] && !loadingPdf[fileKey]) {
+          setLoadingPdf(prev => ({ ...prev, [fileKey]: true }));
+          
+          try {
+            const pdfjsLib = await import('pdfjs-dist');
+            // CDN compatível com versão 4.4.168
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+            
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            const page = await pdf.getPage(1);
+            
+            const scale = 0.5;
+            const viewport = page.getViewport({ scale });
+            
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            
+            await page.render({ canvasContext: context, viewport }).promise;
+            
+            if (!cancelled) {
+              const thumbnail = canvas.toDataURL('image/png');
+              setPdfThumbnails(prev => ({ ...prev, [fileKey]: thumbnail }));
+            }
+          } catch (err) {
+            console.error('Erro ao gerar thumbnail PDF:', err);
+          } finally {
+            if (!cancelled) {
+              setLoadingPdf(prev => ({ ...prev, [fileKey]: false }));
+            }
+          }
+        }
+      };
+      
+      generatePreview();
+      
+      return () => {
+        cancelled = true;
+      };
+    }, [fileKey, file.type, file.name]); // Dependências estáveis
+
+    return (
+      <div className="bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up overflow-hidden">
+        <div className="flex items-center justify-between p-3">
+          <div className="flex items-center gap-3 flex-1 min-w-0">
+            <div className={`p-2 rounded-lg shrink-0 ${typeInfo.color}`}>
+              <typeInfo.icon size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold text-slate-700 truncate">{file.name}</p>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${typeInfo.color}`}>
+                  {typeInfo.label}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">{formatFileSize(file.size)}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {(file.type === 'text/plain' && preview) || (file.type === 'application/pdf' && (pdfThumb || isPdfLoading)) ? (
+              <button 
+                onClick={() => setExpandedFiles(prev => ({ ...prev, [fileKey]: !isExpanded }))}
+                className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                title={isExpanded ? "Ocultar preview" : "Ver preview"}
+              >
+                {isExpanded ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            ) : null}
+            <button 
+              onClick={onRemove}
+              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+              title="Remover arquivo"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+        
+        {/* Preview do conteúdo TXT */}
+        {file.type === 'text/plain' && preview && isExpanded && (
+          <div className="border-t border-indigo-100 bg-slate-50 p-3">
+            <p className="text-xs font-medium text-slate-500 mb-2">Preview do conteúdo:</p>
+            <pre className="text-xs text-slate-600 bg-white p-3 rounded-lg border border-slate-200 max-h-32 overflow-auto whitespace-pre-wrap font-mono">
+              {preview.length > 500 ? preview.substring(0, 500) + '...' : preview}
+            </pre>
+          </div>
+        )}
+        
+        {/* Thumbnail do PDF */}
+        {file.type === 'application/pdf' && isExpanded && (
+          <div className="border-t border-indigo-100 bg-slate-50 p-3">
+            <p className="text-xs font-medium text-slate-500 mb-2">Preview da primeira página:</p>
+            {isPdfLoading ? (
+              <div className="flex items-center justify-center py-8 bg-white rounded-lg border border-slate-200">
+                <div className="flex items-center gap-2 text-slate-400">
+                  <Loader2 size={20} className="animate-spin" />
+                  <span className="text-sm">Gerando preview...</span>
+                </div>
+              </div>
+            ) : pdfThumb ? (
+              <img 
+                src={pdfThumb} 
+                alt="Preview PDF" 
+                className="max-h-48 mx-auto rounded-lg border border-slate-200 shadow-sm"
+              />
+            ) : (
+              <div className="flex items-center justify-center py-8 bg-white rounded-lg border border-slate-200">
+                <span className="text-sm text-slate-400">Não foi possível gerar preview</span>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Indicação para DOCX */}
+        {file.type.includes('wordprocessingml') && (
+          <div className="border-t border-indigo-100 bg-slate-50 px-3 py-2">
+            <p className="text-xs text-slate-400 italic">
+              ℹ️ Preview não disponível para arquivos DOCX
+            </p>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const validateStep = (currentStep) => {
@@ -749,24 +982,13 @@ const App = () => {
                  {formData.faqFiles.length > 0 && (
                    <div className="space-y-2 mb-4">
                      {formData.faqFiles.map((file, index) => (
-                       <div key={index} className="flex items-center justify-between p-3 bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up">
-                         <div className="flex items-center gap-3">
-                           <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-                             <FileIcon size={20} />
-                           </div>
-                           <div>
-                             <p className="text-sm font-bold text-slate-700 truncate max-w-[180px]">{file.name}</p>
-                             <p className="text-xs text-slate-400">{(file.size / 1024).toFixed(1)} KB</p>
-                           </div>
-                         </div>
-                         <button 
-                           onClick={() => removeFile('faqFiles', index)}
-                           className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                           title="Remover arquivo"
-                         >
-                           <X size={18} />
-                         </button>
-                       </div>
+                       <FilePreviewCard 
+                         key={index}
+                         file={file}
+                         index={index}
+                         fieldName="faqFiles"
+                         onRemove={() => removeFile('faqFiles', index)}
+                       />
                      ))}
                    </div>
                  )}
@@ -839,24 +1061,13 @@ const App = () => {
                  {formData.trainingFiles.length > 0 && (
                    <div className="space-y-2 mb-4">
                      {formData.trainingFiles.map((file, index) => (
-                       <div key={index} className="flex items-center justify-between p-3 bg-white border border-indigo-200 rounded-xl shadow-sm animate-fade-in-up">
-                         <div className="flex items-center gap-3">
-                           <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-                             <FileIcon size={20} />
-                           </div>
-                           <div>
-                             <p className="text-sm font-bold text-slate-700 truncate max-w-[180px]">{file.name}</p>
-                             <p className="text-xs text-slate-400">{(file.size / 1024).toFixed(1)} KB</p>
-                           </div>
-                         </div>
-                         <button 
-                           onClick={() => removeFile('trainingFiles', index)}
-                           className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                           title="Remover arquivo"
-                         >
-                           <X size={18} />
-                         </button>
-                       </div>
+                       <FilePreviewCard 
+                         key={index}
+                         file={file}
+                         index={index}
+                         fieldName="trainingFiles"
+                         onRemove={() => removeFile('trainingFiles', index)}
+                       />
                      ))}
                    </div>
                  )}
